@@ -181,13 +181,13 @@ void eval(char *cmdline)
 		sigprocmask(SIG_BLOCK, &mask, NULL);/*set the "set" to emptyset, and block SIGCHILD and save null set. so from now on, the code will not be interrupted by SIGCHILD.SIGCHILD is a signal to terminate child process. We have to prevent from stopping child process in bg to be a zombie process*/
 		if((pid=fork())==0){/*if it is not a builtin_cmd, fork a child process*/
 			setpgid(0,0);	
-			sigprocmask(SIG_UNBLOCK, &mask, NULL);
+			sigprocmask(SIG_UNBLOCK, &mask, NULL);//before execute, we have to unblock the signal 
 			if(execve(argv[0], argv, environ)<0){
 				printf("%s:Command not found.\n", argv[0]);
 				exit(0);
 			}
 		}
-		/* if it is a foreground, before unblock the SIGCHILD signal, add to joblist and then unblock,  parent waits for foreground job to terminate*/
+		/* if it is a foreground, before unblock the SIGCHILD signal, add to joblist and then unblock,  parent waits for foreground job to terminate. if we unblock after do addjob, there can be get signal to terminate, so delete can be occured berfore addjob. it can be problem, so we have to do unblock the signal after addjob*/
 		if(!bg){
 			addjob(jobs, pid, FG, cmdline);
 			sigprocmask(SIG_UNBLOCK, &mask, NULL);
@@ -285,7 +285,7 @@ int builtin_cmd(char **argv)
    	else if(!strcmp(argv[0], "fg")){
 		do_bgfg(argv);
 		return 1;
-	}/* if argv is a builtin_cmd in bg, execute and return 1*/
+	}/* if argv is a builtin_cmd in fg, execute and return 1*/
 	return 0;     /* if argv is  not a builtin command */
 }
 
@@ -297,7 +297,7 @@ void do_bgfg(char **argv)
     	struct job_t *current;
 	char *temp;
 	pid_t pid;
-	int jid;
+	int jobid;
 	temp= argv[1];
 	if(temp == NULL){
 		printf("%s command requires PID or %%jobid argument\n", argv[0]);
@@ -314,9 +314,9 @@ void do_bgfg(char **argv)
         }
 
 	else if(temp[0] =='%'){/*char start with % is jid*/ 
-		jid = atoi(&temp[1]);;/*atoi is a function which converts string to integer and argv is a char pointer pointer, argv[1] is also a char pointer type, so eventually char type. so to get pid from argv, we have to convert it to int*/
+		jobid = atoi(&temp[1]);;/*atoi is a function which converts string to integer and argv is a char pointer pointer, argv[1] is also a char pointer type, so eventually char type. so to get pid from argv, we have to convert it to int*/
 
-		current = getjobjid(jobs, jid);
+		current = getjobjid(jobs, jobid);
 		if(current == NULL){/*if there is no job with jid,that is invalid jid so print no such job*/ 
 			printf("%s : No such job\n", temp);
 			return;
@@ -325,12 +325,14 @@ void do_bgfg(char **argv)
 			pid = current->pid;
 		}
 	}
-	/* until now, we can get pid of job*/
+	
 	else{
 		printf("%s : argument must be a PID or %%jobid\n", argv[0]);
 		return;
-	}
-	
+	}//if it is not pid or jid or null 
+
+	/* until now, we can get pid of job*/
+
 	kill(-pid, SIGCONT);/*do_bgfg execute to start the process which was stopped before or newly created. so we have to send signal SIGCONT*/
 	if(!strcmp("fg", argv[0])){/*if it is in a foreground, we have to wait for that job to terminate*/
 		current->state = FG;
@@ -347,11 +349,11 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-	struct job_t *job = getjobpid(jobs, pid);/*To terminate some process, we have to know what process we have to terminate. So by using getjobpid, find job with pid*/
+	struct job_t *current = getjobpid(jobs, pid);/*To terminate some process, we have to know what process we have to terminate. So by using getjobpid, find job with pid*/
 	if(pid==0){
 		return;
 	}
-	if(job==NULL){
+	if(current==NULL){
 		return;/*if there is no job with pid, it is invalid pid*/
 	}
 	else{
@@ -378,7 +380,7 @@ void sigchld_handler(int sig)
     	int status;
 	pid_t pid;
 	/*reap a child by using waitpid*/
-	while(( pid = waitpid(-1, &status, WNOHANG|WUNTRACED))>0){/*waitpid return the value of reaped child's pid and pid is a nonzero positive number so we can check above condition*/
+	while((pid = waitpid(-1, &status, WNOHANG|WUNTRACED))>0){/*waitpid return the value of reaped child's pid and pid is a nonzero positive number so we can check above condition*/
 		if(WIFSIGNALED(status)){
 			
 			printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
