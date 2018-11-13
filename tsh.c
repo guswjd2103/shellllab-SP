@@ -85,6 +85,14 @@ void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
 
+pid_t checkerrfork(void);
+void checkerrsigprocmask(int SIG, const sigset_t *current, sigset_t *prev);
+void checkerrkill(pid_t pid, int sig);
+void checkerrsigaddset(sigset_t *current, int num);
+void checkerrsigemptyset(sigset_t *current);
+void checkerrsetpgid(pid_t pid, pid_t pgid);
+
+
 /*
  * main - The shell's main routine 
  */
@@ -176,12 +184,12 @@ void eval(char *cmdline)
 	if(argv[0]==NULL)
 		return;
 	if(!builtin_cmd(argv)){
-		sigemptyset(&mask);
-		sigaddset(&mask, SIGCHLD);
-		sigprocmask(SIG_BLOCK, &mask, NULL);/*set the "set" to emptyset, and block SIGCHILD and save null set. so from now on, the code will not be interrupted by SIGCHILD.SIGCHILD is a signal to terminate child process. We have to prevent from stopping child process in bg to be a zombie process*/
-		if((pid=fork())==0){/*if it is not a builtin_cmd, fork a child process*/
-			setpgid(0,0);	
-			sigprocmask(SIG_UNBLOCK, &mask, NULL);//before execute, we have to unblock the signal 
+		checkerrsigemptyset(&mask);
+		checkerrsigaddset(&mask, SIGCHLD);
+		checkerrsigprocmask(SIG_BLOCK, &mask, NULL);/*set the "set" to emptyset, and block SIGCHILD and save null set. so from now on, the code will not be interrupted by SIGCHILD.SIGCHILD is a signal to terminate child process. We have to prevent from stopping child process in bg to be a zombie process*/
+		if((pid=checkerrfork())==0){/*if it is not a builtin_cmd, fork a child process*/
+			checkerrsetpgid(0,0);	
+			checkerrsigprocmask(SIG_UNBLOCK, &mask, NULL);//before execute, we have to unblock the signal 
 			if(execve(argv[0], argv, environ)<0){
 				printf("%s:Command not found.\n", argv[0]);
 				exit(0);
@@ -190,12 +198,12 @@ void eval(char *cmdline)
 		/* if it is a foreground, before unblock the SIGCHILD signal, add to joblist and then unblock,  parent waits for foreground job to terminate. if we unblock after do addjob, there can be get signal to terminate, so delete can be occured berfore addjob. it can be problem, so we have to do unblock the signal after addjob*/
 		if(!bg){
 			addjob(jobs, pid, FG, cmdline);
-			sigprocmask(SIG_UNBLOCK, &mask, NULL);
+			checkerrsigprocmask(SIG_UNBLOCK, &mask, NULL);
 			waitfg(pid);
 		}
 		else{/* if it is a background, add to joblist of bg before unblock the signal*/
 			addjob(jobs, pid, BG, cmdline);
-                        sigprocmask(SIG_UNBLOCK, &mask, NULL);
+                        checkerrsigprocmask(SIG_UNBLOCK, &mask, NULL);
 			printf("[%d] (%d) %s" , pid2jid(pid), pid, cmdline);
 			
 		}
@@ -333,7 +341,7 @@ void do_bgfg(char **argv)
 
 	/* until now, we can get pid of job*/
 
-	kill(-pid, SIGCONT);/*do_bgfg execute to start the process which was stopped before or newly created. so we have to send signal SIGCONT*/
+	checkerrkill(-pid, SIGCONT);/*do_bgfg execute to start the process which was stopped before or newly created. so we have to send signal SIGCONT*/
 	if(!strcmp("fg", argv[0])){/*if it is in a foreground, we have to wait for that job to terminate*/
 		current->state = FG;
 		waitfg(current->pid);
@@ -408,7 +416,7 @@ void sigint_handler(int sig)
 {
     	pid_t fgofpid =fgpid(jobs);/*get pid of jobs*/
 	if(fgofpid!=0)/*if pid is nonzero positive integer, send signal of argument sig such as SIGINT*/
-		kill(-fgofpid, sig);
+		checkerrkill(-fgofpid, sig);
  
 	return;
 }
@@ -422,7 +430,7 @@ void sigtstp_handler(int sig)
 {
     	pid_t fgofpid = fgpid(jobs);/* get pid of jobs*/
 	if(fgofpid!=0)/* if pid is nonzero positive integer,send signal of argument sig such as SIGSTP*/
-		kill(-fgofpid, sig);
+		checkerrkill(-fgofpid, sig);
 	return;
 }
 
@@ -644,6 +652,40 @@ void sigquit_handler(int sig)
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
 }
+/*to check the return value of EVERY system call, and if the return value is negative then not do just system call, print error message*/
+pid_t checkerrfork(void){
+        pid_t pid;
+        if((pid=fork())<0){
+                unix_error("fork error");
+        }
+        return pid;
+}
+void checkerrsigprocmask(int SIG, const sigset_t *current, sigset_t *prev){
+        if(sigprocmask(SIG, current, prev)<0){
+                app_error("sigprocmaks error");
+        }
+}
 
+void checkerrkill(pid_t pid, int sig){
+	if(kill(pid, sig)<0){
+		unix_error("kill error");
+	}
+}
 
+void checkerrsigaddset(sigset_t *current, int num){
+	if(sigaddset(current, num)<0){
+		app_error("sigaddset error");
+	}
+}
 
+void checkerrsigemptyset(sigset_t *current){
+	if(sigemptyset(current)<0){
+		app_error("sigemptyset error");
+	}
+}
+
+void checkerrsetpgid(pid_t pid, pid_t pgid){
+	if(setpgid(pid, pgid)<0){
+		unix_error("setpgid error");
+	}
+}
